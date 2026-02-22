@@ -12,11 +12,9 @@ from dotenv import load_dotenv
 import anthropic
 import requests
 from googleapiclient.discovery import build
-from youtube_transcript_api import (
-    YouTubeTranscriptApi,
-    TranscriptsDisabled,
-    NoTranscriptFound,
-)
+from youtube_transcript_api import YouTubeTranscriptApi
+
+_ytt = YouTubeTranscriptApi()
 
 load_dotenv()
 
@@ -120,9 +118,18 @@ def get_all_videos(youtube, channel_id: str) -> list:
 
 def get_transcript(video_id: str) -> str | None:
     try:
-        entries = YouTubeTranscriptApi.get_transcript(video_id)
-        return "\n".join(f"[{int(e['start'])}s] {e['text']}" for e in entries)
-    except (TranscriptsDisabled, NoTranscriptFound, Exception):
+        transcript_list = _ytt.list(video_id)
+        # Prefer manual English, fall back to any auto-generated English, then first available
+        try:
+            t = transcript_list.find_manually_created_transcript(["en"])
+        except Exception:
+            try:
+                t = transcript_list.find_generated_transcript(["en"])
+            except Exception:
+                t = next(iter(transcript_list))
+        fetched = t.fetch()
+        return "\n".join(f"[{int(e.start)}s] {e.text}" for e in fetched)
+    except Exception:
         return None
 
 
