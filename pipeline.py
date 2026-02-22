@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 import anthropic
 import requests
 from googleapiclient.discovery import build
-from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 
 _ytt = YouTubeTranscriptApi()
 
@@ -116,21 +116,29 @@ def get_all_videos(youtube, channel_id: str) -> list:
     return videos
 
 
-def get_transcript(video_id: str) -> str | None:
+def get_transcript(video_id: str) -> tuple[str | None, str]:
+    time.sleep(2)  # avoid rate limiting
     try:
         transcript_list = _ytt.list(video_id)
-        # Prefer manual English, fall back to any auto-generated English, then first available
+
+        # Skip manual entirely — go straight to auto-generated
         try:
-            t = transcript_list.find_manually_created_transcript(["en"])
-        except Exception:
-            try:
-                t = transcript_list.find_generated_transcript(["en"])
-            except Exception:
-                t = next(iter(transcript_list))
-        fetched = t.fetch()
-        return "\n".join(f"[{int(e.start)}s] {e.text}" for e in fetched)
-    except Exception:
-        return None
+            transcript = transcript_list.find_generated_transcript(["en"])
+        except NoTranscriptFound:
+            # Fall back to any available language
+            for t in transcript_list:
+                transcript = t
+                break
+            else:
+                return None, "no_transcript"
+
+        text = " ".join(entry.text for entry in transcript.fetch())
+        return text, "auto-generated"
+
+    except TranscriptsDisabled:
+        return None, "disabled"
+    except Exception as e:
+        return None, str(e)
 
 
 # ── Claude ────────────────────────────────────────────────────────────────────
@@ -256,10 +264,11 @@ def main() -> None:
 
         print(f"[{idx}/{len(new_videos)}] {title}  ({date})")
 
-        transcript = get_transcript(vid_id)
+        transcript, transcript_status = get_transcript(vid_id)
         if not transcript:
-            print("  → No transcript available — skipping\n")
+            print(f"  → No transcript ({transcript_status}) — skipping\n")
             continue
+        print(f"  → Transcript: {transcript_status}")
 
         print("  → Extracting references via Claude...")
         refs = extract_references(client, title, transcript)
